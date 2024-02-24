@@ -11,7 +11,7 @@ import Geolocation, {
   GeolocationResponse,
 } from '@react-native-community/geolocation';
 import MapViewDirections, {Directions} from 'react-native-maps-directions';
-
+import Geocoding from 'react-native-geocoding';
 
 interface MarkerProps {
   id: number;
@@ -91,6 +91,15 @@ const App: React.FC = () => {
         },
       ]);
 
+      Geocoding.init(apiKey, {language: 'en'});
+
+      Geocoding.from('Street 555 Ibn Dinar street, Zone 55, Building 25')
+        .then(response => {
+          const {lat, lng} = response.results[0].geometry.location;
+          console.log(`Latitude: ${lat}, Longitude: ${lng}`);
+        })
+        .catch(error => console.error(error));
+
       const granted = await PermissionsAndroid.request(
         PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
         {
@@ -102,7 +111,7 @@ const App: React.FC = () => {
 
       if (granted === PermissionsAndroid.RESULTS.GRANTED) {
         console.log('this grand');
-        
+
         Geolocation.getCurrentPosition(
           (position: GeolocationResponse) => {
             const {latitude, longitude} = position.coords;
@@ -117,40 +126,75 @@ const App: React.FC = () => {
     } catch (err) {
       console.warn(err);
     }
+  };
 
-    const destinations = markers.map(
-      marker => `${marker.latitude},${marker.longitude}`,
-    );
+  function calculateDistance(point1: Directions, point2: Directions) {
+    const R = 6371;
+    const dLat = (point2.latitude - point1.latitude) * (Math.PI / 180);
+    const dLon = (point2.longitude - point1.longitude) * (Math.PI / 180);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(point1.latitude * (Math.PI / 180)) *
+        Math.cos(point2.latitude * (Math.PI / 180)) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const distance = R * c;
 
-    const origins = `${currentLocation?.latitude},${currentLocation?.longitude}`;
-    if (origins) {
-      const apiUrl = `https://maps.googleapis.com/maps/api/distancematrix/json?units=metric&origins=${origins}&destinations=${destinations.join(
-        '|',
-      )}&key=${apiKey}`;
-      try {
-        const response = await fetch(apiUrl);
-        if (!response.ok) {
-          throw new Error(`HTTP error! Status: ${response.status}`);
-        }
+    return distance;
+  }
 
-        const responseData = await response.json();
-        console.log(responseData?.rows[0]?.elements, 'this is elements');
-
-        const distances = responseData?.rows[0]?.elements?.map(
-          (element: {distance: {value: number}}) => element?.distance.value,
-        );
-        const farthestIndex = distances.indexOf(Math.max(...distances));
-        setFarthestMarker(markers[farthestIndex]);
-      } catch (error) {
-        console.error('Error fetching distance matrix', error);
+  function findNearestNeighbor(
+    point: Directions,
+    unvisitedPoints: Directions[],
+  ) {
+    let nearestNeighbor: Directions | null = null;
+    let minDistance = Infinity;
+    for (const unvisitedPoint of unvisitedPoints) {
+      const distance = calculateDistance(point, unvisitedPoint);
+      console.log(unvisitedPoint.title + ':', distance);
+      if (distance < minDistance) {
+        minDistance = distance;
+        nearestNeighbor = unvisitedPoint;
       }
     }
-  };
+
+    console.log(nearestNeighbor, minDistance, 'this');
+
+    return nearestNeighbor;
+  }
+  let a: number = 1;
+  function solveTSP(startingPoint: Directions, points: Directions[]) {
+    let currentPoint = startingPoint;
+    let unvisitedPoints = [...points];
+    const tspSolution: Directions[] = [];
+
+    while (unvisitedPoints.length > 0) {
+      const nearestNeighbor = findNearestNeighbor(
+        currentPoint,
+        unvisitedPoints,
+      );
+
+      tspSolution.push({
+        ...nearestNeighbor,
+        description: `Description for Marker`,title: `Location ${a++}`});
+        unvisitedPoints = unvisitedPoints.filter(
+        point => point !== nearestNeighbor,
+      );
+    }
+
+    return tspSolution;
+  }
 
   useEffect(() => {
     requestLocationPermission();
   }, []);
-  console.log(currentLocation + 'this is cure');
+  let tspsolution;
+  if (currentLocation) {
+    tspsolution = solveTSP(currentLocation, markers);
+    console.log(tspsolution, 'tsp solution');
+  }
+
   return (
     <View style={styles.container}>
       {currentLocation && (
@@ -158,12 +202,12 @@ const App: React.FC = () => {
           style={styles.map}
           provider={PROVIDER_GOOGLE}
           initialRegion={{
-            latitude: 25.3548,
-            longitude: 51.1839,
+            latitude: currentLocation.latitude,
+            longitude: currentLocation.longitude,
             latitudeDelta: 0.01,
             longitudeDelta: 0.01,
           }}>
-          {markers.map(marker => (
+          {tspsolution?.map(marker => (
             <Marker
               key={marker.id}
               coordinate={{
@@ -186,17 +230,14 @@ const App: React.FC = () => {
           />
           <MapViewDirections
             origin={currentLocation}
-            waypoints={markers.map(marker => ({
+            waypoints={tspsolution?.map(marker => ({
               latitude: marker.latitude,
               longitude: marker.longitude,
             }))}
-            destination={farthestMarker}
-            apikey="AIzaSyDp0XbRCB978UJnBMtfrtJIpwD5W9GVm94"
+            destination={tspsolution[tspsolution?.length - 1]}
+            apikey={apiKey}
             strokeWidth={3}
             strokeColor="blue"
-            optimizeWaypoints={true}
-            
-            
           />
         </MapView>
       )}
